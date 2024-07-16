@@ -34,4 +34,3 @@ version-sync = "^0.9.0"
 
 [features]
 ssh = ["dep:ssh-key"]
-default = ["ssh"]
