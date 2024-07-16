@@ -1,8 +1,9 @@
-use bc_crypto::{ SCHNORR_SIGNATURE_SIZE, ECDSA_SIGNATURE_SIZE };
-use bc_ur::prelude::*;
-use ssh_key::{ LineEnding, SshSig };
 use crate::tags;
-use anyhow::{ bail, Result, Error };
+use anyhow::{bail, Error, Result};
+use bc_crypto::{ECDSA_SIGNATURE_SIZE, SCHNORR_SIGNATURE_SIZE};
+use bc_ur::prelude::*;
+#[cfg(feature = "ssh")]
+use ssh_key::{LineEnding, SshSig};
 
 /// A cryptographic signature. Supports ECDSA and Schnorr.
 #[derive(Clone, PartialEq, Eq)]
@@ -12,13 +13,17 @@ pub enum Signature {
         tag: Vec<u8>,
     },
     ECDSA([u8; ECDSA_SIGNATURE_SIZE]),
+    #[cfg(feature = "ssh")]
     SSH(SshSig),
 }
 
 impl Signature {
     /// Restores a Schnorr signature from an array of bytes.
     pub fn schnorr_from_data(data: [u8; SCHNORR_SIGNATURE_SIZE], tag: impl Into<Vec<u8>>) -> Self {
-        Self::Schnorr { sig: data, tag: tag.into() }
+        Self::Schnorr {
+            sig: data,
+            tag: tag.into(),
+        }
     }
 
     /// Restores a Schnorr signature from a vector of bytes.
@@ -49,6 +54,7 @@ impl Signature {
     }
 
     /// Restores an SSH signature from a `SshSig`.
+    #[cfg(feature = "ssh")]
     pub fn from_ssh(sig: SshSig) -> Self {
         Self::SSH(sig)
     }
@@ -67,6 +73,7 @@ impl Signature {
         }
     }
 
+    #[cfg(feature = "ssh")]
     pub fn to_ssh(&self) -> Option<&SshSig> {
         match self {
             Self::SSH(sig) => Some(sig),
@@ -78,16 +85,17 @@ impl Signature {
 impl std::fmt::Debug for Signature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Signature::Schnorr { sig: data, tag } => {
-                f.debug_struct("Schnorr")
-                    .field("data", &hex::encode(data))
-                    .field("tag", &hex::encode(tag))
-                    .finish()
-            }
-            Signature::ECDSA(data) => {
-                f.debug_struct("ECDSA").field("data", &hex::encode(data)).finish()
-            }
-            Signature::SSH(sig) => { f.debug_struct("SSH").field("sig", sig).finish() }
+            Signature::Schnorr { sig: data, tag } => f
+                .debug_struct("Schnorr")
+                .field("data", &hex::encode(data))
+                .field("tag", &hex::encode(tag))
+                .finish(),
+            Signature::ECDSA(data) => f
+                .debug_struct("ECDSA")
+                .field("data", &hex::encode(data))
+                .finish(),
+            #[cfg(feature = "ssh")]
+            Signature::SSH(sig) => f.debug_struct("SSH").field("sig", sig).finish(),
         }
     }
 }
@@ -120,7 +128,8 @@ impl CBORTaggedEncodable for Signature {
                     vec![CBOR::to_byte_string(data), CBOR::to_byte_string(tag)].into()
                 }
             }
-            Signature::ECDSA(data) => { vec![(1).into(), CBOR::to_byte_string(data)].into() }
+            Signature::ECDSA(data) => vec![(1).into(), CBOR::to_byte_string(data)].into(),
+            #[cfg(feature = "ssh")]
             Signature::SSH(sig) => {
                 let pem = sig.to_pem(LineEnding::LF).unwrap();
                 CBOR::to_tagged_value(tags::SSH_TEXT_SIGNATURE, pem)
@@ -140,7 +149,7 @@ impl TryFrom<CBOR> for Signature {
 impl CBORTaggedDecodable for Signature {
     fn from_untagged_cbor(cbor: CBOR) -> Result<Self> {
         match cbor.into_case() {
-            CBORCase::ByteString(bytes) => { Self::schnorr_from_data_ref(bytes, Vec::new()) }
+            CBORCase::ByteString(bytes) => Self::schnorr_from_data_ref(bytes, Vec::new()),
             CBORCase::Array(mut elements) => {
                 if elements.len() == 2 {
                     let mut drain = elements.drain(0..);
@@ -162,6 +171,7 @@ impl CBORTaggedDecodable for Signature {
                 }
                 bail!("Invalid signature format");
             }
+            #[cfg(feature = "ssh")]
             CBORCase::Tagged(tag, item) => {
                 if tag == tags::SSH_TEXT_SIGNATURE {
                     let string = item.try_into_text()?;
@@ -179,22 +189,20 @@ impl CBORTaggedDecodable for Signature {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::{ ECPrivateKey, Signature, Signer, SigningOptions, SigningPrivateKey, Verifier };
+    use crate::{ECPrivateKey, Signature, Signer, SigningOptions, SigningPrivateKey, Verifier};
     use bc_rand::make_fake_random_number_generator;
     use dcbor::prelude::*;
     use hex_literal::hex;
     use indoc::indoc;
 
-    const ECDSA_SIGNING_PRIVATE_KEY: SigningPrivateKey = SigningPrivateKey::new_ecdsa(
-        ECPrivateKey::from_data(
-            hex!("322b5c1dd5a17c3481c2297990c85c232ed3c17b52ce9905c6ec5193ad132c36")
-        )
-    );
-    const SCHNORR_SIGNING_PRIVATE_KEY: SigningPrivateKey = SigningPrivateKey::new_schnorr(
-        ECPrivateKey::from_data(
-            hex!("322b5c1dd5a17c3481c2297990c85c232ed3c17b52ce9905c6ec5193ad132c36")
-        )
-    );
+    const ECDSA_SIGNING_PRIVATE_KEY: SigningPrivateKey =
+        SigningPrivateKey::new_ecdsa(ECPrivateKey::from_data(hex!(
+            "322b5c1dd5a17c3481c2297990c85c232ed3c17b52ce9905c6ec5193ad132c36"
+        )));
+    const SCHNORR_SIGNING_PRIVATE_KEY: SigningPrivateKey =
+        SigningPrivateKey::new_schnorr(ECPrivateKey::from_data(hex!(
+            "322b5c1dd5a17c3481c2297990c85c232ed3c17b52ce9905c6ec5193ad132c36"
+        )));
     const MESSAGE: &dyn AsRef<[u8]> = b"Wolf McNally";
 
     #[test]
@@ -214,7 +222,9 @@ mod tests {
     fn test_schnorr_cbor() {
         let rng = Rc::new(RefCell::new(make_fake_random_number_generator()));
         let options = SigningOptions::Schnorr { tag: vec![], rng };
-        let signature = SCHNORR_SIGNING_PRIVATE_KEY.sign_with_options(MESSAGE, Some(options)).unwrap();
+        let signature = SCHNORR_SIGNING_PRIVATE_KEY
+            .sign_with_options(MESSAGE, Some(options))
+            .unwrap();
         let signature_cbor: CBOR = signature.clone().into();
         let tagged_cbor_data = signature_cbor.to_cbor_data();
         assert_eq!(

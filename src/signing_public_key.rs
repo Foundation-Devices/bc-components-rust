@@ -1,6 +1,7 @@
-use crate::{ tags, ECKeyBase, ECPublicKey, SchnorrPublicKey, Signature, Verifier };
-use anyhow::{ bail, Result, Error };
+use crate::{tags, ECKeyBase, ECPublicKey, SchnorrPublicKey, Signature, Verifier};
+use anyhow::{bail, Error, Result};
 use bc_ur::prelude::*;
+#[cfg(feature = "ssh")]
 use ssh_key::public::PublicKey as SSHPublicKey;
 
 /// A public key that can be used for signing. Supports both ECDSA and Schnorr.
@@ -8,6 +9,7 @@ use ssh_key::public::PublicKey as SSHPublicKey;
 pub enum SigningPublicKey {
     Schnorr(SchnorrPublicKey),
     ECDSA(ECPublicKey),
+    #[cfg(feature = "ssh")]
     SSH(SSHPublicKey),
 }
 
@@ -23,6 +25,7 @@ impl SigningPublicKey {
     }
 
     /// Restores a `SigningPublicKey` from an SSH public key.
+    #[cfg(feature = "ssh")]
     pub fn from_ssh(key: SSHPublicKey) -> Self {
         Self::SSH(key)
     }
@@ -44,13 +47,13 @@ impl SigningPublicKey {
     }
 
     /// Returns the SSH public key of this `SigningPublicKey`, if it is an SSH key.
+    #[cfg(feature = "ssh")]
     pub fn to_ssh(&self) -> Option<&SSHPublicKey> {
         match self {
             Self::SSH(key) => Some(key),
             _ => None,
         }
     }
-
 }
 
 impl Verifier for SigningPublicKey {
@@ -61,25 +64,19 @@ impl Verifier for SigningPublicKey {
     /// will fail.
     fn verify(&self, signature: &Signature, message: &dyn AsRef<[u8]>) -> bool {
         match self {
-            SigningPublicKey::Schnorr(key) => {
-                match signature {
-                    Signature::Schnorr { sig, tag } => key.schnorr_verify(sig, message, tag),
-                    _ => false,
-                }
-            }
-            SigningPublicKey::ECDSA(key) => {
-                match signature {
-                    Signature::ECDSA(sig) => key.verify(sig, message),
-                    _ => false,
-                }
-            }
-            SigningPublicKey::SSH(key) => {
-                match signature {
-                    Signature::SSH(sig) =>
-                        key.verify(sig.namespace(), message.as_ref(), sig).is_ok(),
-                    _ => false,
-                }
-            }
+            SigningPublicKey::Schnorr(key) => match signature {
+                Signature::Schnorr { sig, tag } => key.schnorr_verify(sig, message, tag),
+                _ => false,
+            },
+            SigningPublicKey::ECDSA(key) => match signature {
+                Signature::ECDSA(sig) => key.verify(sig, message),
+                _ => false,
+            },
+            #[cfg(feature = "ssh")]
+            SigningPublicKey::SSH(key) => match signature {
+                Signature::SSH(sig) => key.verify(sig.namespace(), message.as_ref(), sig).is_ok(),
+                _ => false,
+            },
         }
     }
 }
@@ -105,10 +102,11 @@ impl From<SigningPublicKey> for CBOR {
 impl CBORTaggedEncodable for SigningPublicKey {
     fn untagged_cbor(&self) -> CBOR {
         match self {
-            SigningPublicKey::Schnorr(key) => { CBOR::to_byte_string(key.data()) }
+            SigningPublicKey::Schnorr(key) => CBOR::to_byte_string(key.data()),
             SigningPublicKey::ECDSA(key) => {
                 vec![(1).into(), CBOR::to_byte_string(key.data())].into()
             }
+            #[cfg(feature = "ssh")]
             SigningPublicKey::SSH(key) => {
                 let string = key.to_openssh().unwrap();
                 CBOR::to_tagged_value(tags::SSH_TEXT_PUBLIC_KEY, string)
@@ -128,9 +126,7 @@ impl TryFrom<CBOR> for SigningPublicKey {
 impl CBORTaggedDecodable for SigningPublicKey {
     fn from_untagged_cbor(untagged_cbor: CBOR) -> Result<Self> {
         match untagged_cbor.into_case() {
-            CBORCase::ByteString(data) => {
-                Ok(Self::Schnorr(SchnorrPublicKey::from_data_ref(data)?))
-            }
+            CBORCase::ByteString(data) => Ok(Self::Schnorr(SchnorrPublicKey::from_data_ref(data)?)),
             CBORCase::Array(mut elements) => {
                 if elements.len() == 2 {
                     let mut drain = elements.drain(0..);
@@ -144,6 +140,7 @@ impl CBORTaggedDecodable for SigningPublicKey {
                 }
                 bail!("invalid signing public key");
             }
+            #[cfg(feature = "ssh")]
             CBORCase::Tagged(tag, item) => {
                 if tag == tags::SSH_TEXT_PUBLIC_KEY {
                     let string = item.try_into_text()?;

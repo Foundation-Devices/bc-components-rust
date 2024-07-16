@@ -65,7 +65,7 @@ mod signature;
 pub use signature::Signature;
 
 mod signing_private_key;
-pub use signing_private_key::{ SigningPrivateKey, SigningOptions };
+pub use signing_private_key::{SigningOptions, SigningPrivateKey};
 
 mod signing_public_key;
 pub use signing_public_key::SigningPublicKey;
@@ -94,13 +94,8 @@ pub use sealed_message::SealedMessage;
 
 mod sskr_mod;
 pub use sskr_mod::{
-    SSKRGroupSpec,
-    SSKRSecret,
-    SSKRShare,
+    sskr_combine, sskr_generate, sskr_generate_using, SSKRGroupSpec, SSKRSecret, SSKRShare,
     SSKRSpec,
-    sskr_generate,
-    sskr_generate_using,
-    sskr_combine,
 };
 
 pub use sskr::SSKRError;
@@ -111,30 +106,23 @@ pub use hkdf_rng::HKDFRng;
 #[cfg(test)]
 mod tests {
     use crate::{
-        tags, AgreementPrivateKey, AgreementPublicKey, ECPrivateKey, PrivateKeyBase, Signature, Signer, SigningOptions, SigningPrivateKey, SigningPublicKey, Verifier
+        tags, AgreementPrivateKey, AgreementPublicKey, ECPrivateKey, PrivateKeyBase, Signature,
+        Signer, SigningOptions, SigningPrivateKey, SigningPublicKey, Verifier,
     };
     use bc_crypto::{
-        ecdsa_new_private_key_using,
-        ecdsa_public_key_from_private_key,
-        ecdsa_sign,
-        ecdsa_verify,
-        schnorr_public_key_from_private_key,
-        schnorr_sign_using,
-        schnorr_verify,
+        ecdsa_new_private_key_using, ecdsa_public_key_from_private_key, ecdsa_sign, ecdsa_verify,
+        schnorr_public_key_from_private_key, schnorr_sign_using, schnorr_verify,
     };
-    use bc_rand::{ make_fake_random_number_generator, RandomNumberGenerator };
-    use bc_ur::{ UREncodable, URDecodable };
+    use bc_rand::{make_fake_random_number_generator, RandomNumberGenerator};
+    use bc_ur::{URDecodable, UREncodable};
     use dcbor::Deref;
     use hex_literal::hex;
+    use indoc::indoc;
+    #[cfg(feature = "ssh")]
     use ssh_key::{
-        Algorithm as SSHAlgorithm,
-        EcdsaCurve,
-        HashAlg,
-        LineEnding,
-        PrivateKey as SSHPrivateKey,
+        Algorithm as SSHAlgorithm, EcdsaCurve, HashAlg, LineEnding, PrivateKey as SSHPrivateKey,
         PublicKey as SSHPublicKey,
     };
-    use indoc::indoc;
 
     #[test]
     fn tags() {
@@ -151,7 +139,10 @@ mod tests {
             private_key_ur,
             "ur:agreement-private-key/hdcxkbrehkrkrsjztodseytknecfgewmgdmwfsvdvysbpmghuozsprknfwkpnehydlweynwkrtct"
         );
-        assert_eq!(AgreementPrivateKey::from_ur_string(private_key_ur).unwrap(), private_key);
+        assert_eq!(
+            AgreementPrivateKey::from_ur_string(private_key_ur).unwrap(),
+            private_key
+        );
 
         let public_key = private_key.public_key();
         let public_key_ur = public_key.ur_string();
@@ -159,11 +150,13 @@ mod tests {
             public_key_ur,
             "ur:agreement-public-key/hdcxwnryknkbbymnoxhswmptgydsotwswsghfmrkksfxntbzjyrnuornkildchgswtdahehpwkrl"
         );
-        assert_eq!(AgreementPublicKey::from_ur_string(public_key_ur).unwrap(), public_key);
-
-        let derived_private_key = AgreementPrivateKey::derive_from_key_material(
-            "password".as_bytes()
+        assert_eq!(
+            AgreementPublicKey::from_ur_string(public_key_ur).unwrap(),
+            public_key
         );
+
+        let derived_private_key =
+            AgreementPrivateKey::derive_from_key_material("password".as_bytes());
         assert_eq!(
             derived_private_key.ur_string(),
             "ur:agreement-private-key/hdcxkgcfkomeeyiemywkftvabnrdolmttlrnfhjnguvaiehlrldmdpemgyjlatdthsnecytdoxat"
@@ -222,7 +215,7 @@ mod tests {
         );
 
         let derived_private_key = SigningPrivateKey::new_schnorr(
-            ECPrivateKey::derive_from_key_material("password".as_bytes())
+            ECPrivateKey::derive_from_key_material("password".as_bytes()),
         );
         assert_eq!(
             derived_private_key.ur_string(),
@@ -230,10 +223,11 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "ssh")]
     fn test_ssh_signing(
         algorithm: SSHAlgorithm,
         expected_private_key: Option<&str>,
-        expected_public_key: Option<&str>
+        expected_public_key: Option<&str>,
     ) {
         const SEED: [u8; 16] = hex!("59f2293a5bce7d4de59e71b4207ac5d2");
         let private_key_base = PrivateKeyBase::from_data(SEED);
@@ -265,15 +259,17 @@ mod tests {
             namespace: "test".to_string(),
             hash_alg: HashAlg::Sha256,
         };
-        let signature: Signature = private_key.sign_with_options(MESSAGE, Some(options)).unwrap();
+        let signature: Signature = private_key
+            .sign_with_options(MESSAGE, Some(options))
+            .unwrap();
         assert!(public_key.verify(&signature, MESSAGE));
     }
 
+    #[cfg(feature = "ssh")]
     #[test]
     fn test_ssh_dsa_signing() {
-        let expected_private_key = Some(
-            indoc! {
-                r#"
+        let expected_private_key = Some(indoc! {
+            r#"
                     -----BEGIN OPENSSH PRIVATE KEY-----
                     b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABsgAAAAdzc2gtZH
                     NzAAAAgQCWG4f7r8FAMT/IL11w9OfM/ZduIQ8vEq1Ub+uMdyJS8wS/jXL5OB2/dPnXCNSt
@@ -296,19 +292,18 @@ mod tests {
                     6ZI0AAAADEtleSBjb21tZW50LgECAwQF
                     -----END OPENSSH PRIVATE KEY-----
                 "#
-            }
-        );
+        });
         let expected_public_key = Some(
             "ssh-dss AAAAB3NzaC1kc3MAAACBAJYbh/uvwUAxP8gvXXD058z9l24hDy8SrVRv64x3IlLzBL+Ncvk4Hb90+dcI1K0vi+NKqkPMyz4O13nAnLptpJDfMYRti/vWaQhEkH8C1JWZ3wVl7kASMsW8fFgxKU7SOmLVj/Wcszu8tC7hAHIMIuFhiM/GCtkpcHdwvG2O+XLnAAAAFQDh8hkuK+cNVyD09fPBxvmbTsf2TQAAAIEAkrlWbq3VKDuf4LrfCs2AMDotM3IbPGpFUza6cjXqOKwI7O4L3wOCz4hsCQuFOpZJj6cj5T0cEdzuyv4op1YLNHvo0srl5KKVe+23yD4t8che8KMPhDam6jC2MOhdIRAAlh1zWC15/bUpnZ6gqjIDDNAh6EJu8unBhvGeFqnm6xUAAACAYKuxt9F5oNmjULDj90WUlYEM+wwZ4bTj/aEJOE2ZT7MuIoLCwSDRfqic5MxOicJe97d9VvmU2MhT3aJOa3lCSY6PaGOxuCir/SxrSUAsentRwr9bgh1TgBu1zibRJR+WAlx2zWezLaspQ0S0B9Fr9bC0NF6xY5rhPsv7cURR1q8= Key comment."
         );
         test_ssh_signing(SSHAlgorithm::Dsa, expected_private_key, expected_public_key);
     }
 
+    #[cfg(feature = "ssh")]
     #[test]
     fn test_ssh_dsa_nistp256_signing() {
-        let expected_private_key = Some(
-            indoc! {
-                r#"
+        let expected_private_key = Some(indoc! {
+            r#"
                     -----BEGIN OPENSSH PRIVATE KEY-----
                     b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS
                     1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQTtBE6+WTueAierXl/c/f83JAmoxm0k
@@ -319,23 +314,24 @@ mod tests {
                     AQIDBA==
                     -----END OPENSSH PRIVATE KEY-----
                 "#
-            }
-        );
+        });
         let expected_public_key = Some(
             "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBO0ETr5ZO54CJ6teX9z9/zckCajGbSRiUYxUyh8s5QV4rHcWpRbRVFWWPHXAcvTd9oWGJM9VH0I0bmJkJSprh4s= Key comment."
         );
         test_ssh_signing(
-            SSHAlgorithm::Ecdsa { curve: EcdsaCurve::NistP256 },
+            SSHAlgorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
             expected_private_key,
-            expected_public_key
+            expected_public_key,
         );
     }
 
+    #[cfg(feature = "ssh")]
     #[test]
     fn test_ssh_dsa_nistp384_signing() {
-        let expected_private_key = Some(
-            indoc! {
-                r#"
+        let expected_private_key = Some(indoc! {
+            r#"
                     -----BEGIN OPENSSH PRIVATE KEY-----
                     b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAiAAAABNlY2RzYS
                     1zaGEyLW5pc3RwMzg0AAAACG5pc3RwMzg0AAAAYQSdYtV5QyUoBDDJX9gOG3DcJyv4qhjV
@@ -347,25 +343,26 @@ mod tests {
                     rH0jbCy0lsAQ5WbsMAAAAMS2V5IGNvbW1lbnQuAQID
                     -----END OPENSSH PRIVATE KEY-----
                 "#
-            }
-        );
+        });
         let expected_public_key = Some(
             "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBJ1i1XlDJSgEMMlf2A4bcNwnK/iqGNUvue10iXI4JUJ2owxZrYRSzLFX88uusNgYINSu5/zetE10nC5n7uhlabQ3rJ8s5PhA9A3G8uowknWG/D/EHFlWMyyvaBv+iFIbog== Key comment."
         );
         test_ssh_signing(
-            SSHAlgorithm::Ecdsa { curve: EcdsaCurve::NistP384 },
+            SSHAlgorithm::Ecdsa {
+                curve: EcdsaCurve::NistP384,
+            },
             expected_private_key,
-            expected_public_key
+            expected_public_key,
         );
     }
 
     // Should succeed but fails part of the time. See next test.
+    #[cfg(feature = "ssh")]
     #[test]
     #[ignore]
     fn test_ssh_dsa_nistp521_signing() {
-        let expected_private_key = Some(
-            indoc! {
-                r#"
+        let expected_private_key = Some(indoc! {
+            r#"
                     -----BEGIN OPENSSH PRIVATE KEY-----
                     b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAArAAAABNlY2RzYS
                     1zaGEyLW5pc3RwNTIxAAAACG5pc3RwNTIxAAAAhQQBD3AAo2UN1WreSuQWtp4DTbfzQ+D2
@@ -379,24 +376,25 @@ mod tests {
                     xLZXkgY29tbWVudC4BAgMEBQY=
                     -----END OPENSSH PRIVATE KEY-----
                 "#
-            }
-        );
+        });
         let expected_public_key = Some(
             "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACFBAEPcACjZQ3Vat5K5Ba2ngNNt/ND4PYvIr27nKQJ8Vd38AylBvIjIRAZsCIs3ICEY58uBqsmIC/ibIpwdIZbZ9PFBQHdXT0iq5s7Al00toIluzMtBBKqhmUhatcPnVfsV1AW1dhjgYqZV4wq4r670hvLoXjWdKtikeVoXPPGv4PmfW6rtw== Key comment."
         );
         test_ssh_signing(
-            SSHAlgorithm::Ecdsa { curve: EcdsaCurve::NistP521 },
+            SSHAlgorithm::Ecdsa {
+                curve: EcdsaCurve::NistP521,
+            },
             expected_private_key,
-            expected_public_key
+            expected_public_key,
         );
     }
 
     // Filed as https://github.com/RustCrypto/SSH/issues/232
+    #[cfg(feature = "ssh")]
     #[ignore]
     #[test]
     fn test_dsa_nistp521() {
-        let encoded_key =
-            r#"
+        let encoded_key = r#"
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAArAAAABNlY2RzYS
 1zaGEyLW5pc3RwNTIxAAAACG5pc3RwNTIxAAAAhQQBD3AAo2UN1WreSuQWtp4DTbfzQ+D2
@@ -413,16 +411,18 @@ xLZXkgY29tbWVudC4BAgMEBQY=
         let private_key = SSHPrivateKey::from_openssh(encoded_key).unwrap();
         const MESSAGE: &[u8] = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
         const NAMESPACE: &str = "test";
-        let signature = private_key.sign(NAMESPACE, HashAlg::Sha256, MESSAGE).unwrap();
+        let signature = private_key
+            .sign(NAMESPACE, HashAlg::Sha256, MESSAGE)
+            .unwrap();
         let public_key = private_key.public_key();
         public_key.verify(NAMESPACE, MESSAGE, &signature).unwrap();
     }
 
+    #[cfg(feature = "ssh")]
     #[test]
     fn test_ssh_ed25519_signing() {
-        let expected_private_key = Some(
-            indoc! {
-                r#"
+        let expected_private_key = Some(indoc! {
+            r#"
                     -----BEGIN OPENSSH PRIVATE KEY-----
                     b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
                     QyNTUxOQAAACBUe4FDGyGIgHf75yVdE4hYl9guj02FdsIadgLC04zObQAAAJA+TyZiPk8m
@@ -431,12 +431,15 @@ xLZXkgY29tbWVudC4BAgMEBQY=
                     2C6PTYV2whp2AsLTjM5tAAAADEtleSBjb21tZW50LgE=
                     -----END OPENSSH PRIVATE KEY-----
                 "#
-            }
-        );
+        });
         let expected_public_key = Some(
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFR7gUMbIYiAd/vnJV0TiFiX2C6PTYV2whp2AsLTjM5t Key comment."
         );
-        test_ssh_signing(SSHAlgorithm::Ed25519, expected_private_key, expected_public_key);
+        test_ssh_signing(
+            SSHAlgorithm::Ed25519,
+            expected_private_key,
+            expected_public_key,
+        );
     }
 
     #[test]
@@ -464,7 +467,12 @@ xLZXkgY29tbWVudC4BAgMEBQY=
                 "15d7396ed2862dfa813679a0a0377d8d55310ff693ef913bc9cddd48aa93e0542e416b52e0572ec20a2b47db1904c9e7632f1229d8b16af09fb4f6e3f8feefa0"
             )
         );
-        assert!(schnorr_verify(&schnorr_public_key, &schnorr_signature, MESSAGE, tag));
+        assert!(schnorr_verify(
+            &schnorr_public_key,
+            &schnorr_signature,
+            MESSAGE,
+            tag
+        ));
     }
 
     #[test]

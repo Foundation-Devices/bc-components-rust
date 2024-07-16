@@ -1,28 +1,19 @@
-use bc_rand::{ rng_random_data, RandomNumberGenerator, SecureRandomNumberGenerator };
+use anyhow::{Error, Result};
+use bc_rand::{rng_random_data, RandomNumberGenerator, SecureRandomNumberGenerator};
 use bc_ur::prelude::*;
-use anyhow::{ bail, Error, Result };
-use ssh_key::private::{
-    DsaKeypair,
-    EcdsaKeypair,
-    Ed25519Keypair,
-    KeypairData,
-    PrivateKey as SSHPrivateKey,
-    RsaKeypair,
+#[cfg(feature = "ssh")]
+use ssh_key::{
+    private::{
+        DsaKeypair, EcdsaKeypair, Ed25519Keypair, KeypairData, PrivateKey as SSHPrivateKey,
+        RsaKeypair,
+    },
+    Algorithm as SSHAlgorithm,
 };
-use ssh_key::Algorithm as SSHAlgorithm;
 use zeroize::ZeroizeOnDrop;
 
 use crate::{
-    tags,
-    AgreementPrivateKey,
-    ECPrivateKey,
-    HKDFRng,
-    PrivateKeyDataProvider,
-    PublicKeyBase,
-    Signature,
-    Signer,
-    SigningOptions,
-    SigningPrivateKey, Verifier,
+    tags, AgreementPrivateKey, ECPrivateKey, PrivateKeyDataProvider, PublicKeyBase, Signature,
+    Signer, SigningOptions, SigningPrivateKey, Verifier,
 };
 
 /// Holds unique data from which keys for signing and encryption can be derived.
@@ -33,7 +24,7 @@ impl Signer for PrivateKeyBase {
     fn sign_with_options(
         &self,
         message: &dyn AsRef<[u8]>,
-        options: Option<SigningOptions>
+        options: Option<SigningOptions>,
     ) -> Result<Signature> {
         let schnorr_key = self.schnorr_signing_private_key();
         schnorr_key.sign_with_options(message, options)
@@ -90,22 +81,21 @@ impl PrivateKeyBase {
     }
 
     /// Derive a new SSH `SigningPrivateKey` from this `PrivateKeyBase`.
+    #[cfg(feature = "ssh")]
     pub fn ssh_signing_private_key(
         &self,
         algorithm: SSHAlgorithm,
-        comment: impl Into<String>
+        comment: impl Into<String>,
     ) -> Result<SigningPrivateKey> {
-        let mut rng = HKDFRng::new(&self.0, algorithm.as_str());
+        let mut rng = crate::HKDFRng::new(&self.0, algorithm.as_str());
         let keypair = match algorithm {
-            SSHAlgorithm::Dsa => { KeypairData::Dsa(DsaKeypair::random(&mut rng)?) }
+            SSHAlgorithm::Dsa => KeypairData::Dsa(DsaKeypair::random(&mut rng)?),
             SSHAlgorithm::Ecdsa { curve } => {
                 KeypairData::Ecdsa(EcdsaKeypair::random(&mut rng, curve)?)
             }
-            SSHAlgorithm::Ed25519 => { KeypairData::Ed25519(Ed25519Keypair::random(&mut rng)) }
-            SSHAlgorithm::Rsa { hash: _ } => {
-                KeypairData::Rsa(RsaKeypair::random(&mut rng, 2048)?)
-            }
-            _ => bail!("Unsupported SSH algorithm: {:?}", algorithm.as_str()),
+            SSHAlgorithm::Ed25519 => KeypairData::Ed25519(Ed25519Keypair::random(&mut rng)),
+            SSHAlgorithm::Rsa { hash: _ } => KeypairData::Rsa(RsaKeypair::random(&mut rng, 2048)?),
+            _ => anyhow::bail!("Unsupported SSH algorithm: {:?}", algorithm.as_str()),
         };
         let private_key = SSHPrivateKey::new(keypair, comment)?;
         Ok(SigningPrivateKey::new_ssh(private_key))
@@ -125,7 +115,7 @@ impl PrivateKeyBase {
     pub fn schnorr_public_key_base(&self) -> PublicKeyBase {
         PublicKeyBase::new(
             self.schnorr_signing_private_key().public_key(),
-            self.agreement_private_key().public_key()
+            self.agreement_private_key().public_key(),
         )
     }
 
@@ -136,7 +126,7 @@ impl PrivateKeyBase {
     pub fn ecdsa_public_key_base(&self) -> PublicKeyBase {
         PublicKeyBase::new(
             self.ecdsa_signing_private_key().public_key(),
-            self.agreement_private_key().public_key()
+            self.agreement_private_key().public_key(),
         )
     }
 
@@ -144,13 +134,17 @@ impl PrivateKeyBase {
     ///
     /// - Includes an SSH public key for signing.
     /// - Includes an X25519 key for key agreement and public key encryption.
+    #[cfg(feature = "ssh")]
     pub fn ssh_public_key_base(
         &self,
         algorithm: SSHAlgorithm,
-        comment: impl Into<String>
+        comment: impl Into<String>,
     ) -> Result<PublicKeyBase> {
         let private_key = self.ssh_signing_private_key(algorithm, comment)?;
-        Ok(PublicKeyBase::new(private_key.public_key(), self.agreement_private_key().public_key()))
+        Ok(PublicKeyBase::new(
+            private_key.public_key(),
+            self.agreement_private_key().public_key(),
+        ))
     }
 
     /// Get the raw data of this `PrivateKeyBase`.
@@ -225,10 +219,10 @@ impl CBORTaggedDecodable for PrivateKeyBase {
 
 #[cfg(test)]
 mod tests {
-    use bc_ur::{ UREncodable, URDecodable };
+    use bc_ur::{URDecodable, UREncodable};
     use hex_literal::hex;
 
-    use crate::{ ECKeyBase, PrivateKeyBase };
+    use crate::{ECKeyBase, PrivateKeyBase};
 
     const SEED: [u8; 16] = hex!("59f2293a5bce7d4de59e71b4207ac5d2");
 
@@ -236,7 +230,11 @@ mod tests {
     fn test_private_key_base() {
         let private_key_base = PrivateKeyBase::from_data(SEED);
         assert_eq!(
-            private_key_base.ecdsa_signing_private_key().to_ecdsa().unwrap().data(),
+            private_key_base
+                .ecdsa_signing_private_key()
+                .to_ecdsa()
+                .unwrap()
+                .data(),
             &hex!("9505a44aaf385ce633cf0e2bc49e65cc88794213bdfbf8caf04150b9c4905f5a")
         );
         assert_eq!(
@@ -258,7 +256,13 @@ mod tests {
         );
 
         let ur = private_key_base.ur_string();
-        assert_eq!(ur, "ur:crypto-prvkeys/gdhkwzdtfthptokigtvwnnjsqzcxknsktdsfecsbbk");
-        assert_eq!(PrivateKeyBase::from_ur_string(&ur).unwrap(), private_key_base);
+        assert_eq!(
+            ur,
+            "ur:crypto-prvkeys/gdhkwzdtfthptokigtvwnnjsqzcxknsktdsfecsbbk"
+        );
+        assert_eq!(
+            PrivateKeyBase::from_ur_string(&ur).unwrap(),
+            private_key_base
+        );
     }
 }

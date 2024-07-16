@@ -1,10 +1,11 @@
-use std::{ cell::RefCell, rc::Rc };
+use std::{cell::RefCell, rc::Rc};
 
+use crate::{tags, ECKey, ECKeyBase, ECPrivateKey, Signature, Signer, SigningPublicKey, Verifier};
+use anyhow::{bail, Error, Result};
+use bc_rand::{RandomNumberGenerator, SecureRandomNumberGenerator};
 use bc_ur::prelude::*;
-use crate::{ tags, ECKey, ECKeyBase, ECPrivateKey, Signature, Signer, SigningPublicKey, Verifier };
-use bc_rand::{ RandomNumberGenerator, SecureRandomNumberGenerator };
-use anyhow::{ bail, Result, Error };
-use ssh_key::{ private::PrivateKey as SSHPrivateKey, HashAlg, LineEnding };
+#[cfg(feature = "ssh")]
+use ssh_key::{private::PrivateKey as SSHPrivateKey, HashAlg, LineEnding};
 
 /// Options for signing a message.
 ///
@@ -17,6 +18,7 @@ pub enum SigningOptions {
         tag: Vec<u8>,
         rng: Rc<RefCell<dyn RandomNumberGenerator>>,
     },
+    #[cfg(feature = "ssh")]
     Ssh {
         namespace: String,
         hash_alg: HashAlg,
@@ -31,6 +33,7 @@ pub enum SigningOptions {
 pub enum SigningPrivateKey {
     Schnorr(ECPrivateKey),
     ECDSA(ECPrivateKey),
+    #[cfg(feature = "ssh")]
     SSH(Box<SSHPrivateKey>),
 }
 
@@ -43,6 +46,7 @@ impl SigningPrivateKey {
         Self::ECDSA(key)
     }
 
+    #[cfg(feature = "ssh")]
     pub fn new_ssh(key: SSHPrivateKey) -> Self {
         Self::SSH(Box::new(key))
     }
@@ -69,6 +73,7 @@ impl SigningPrivateKey {
         self.to_ecdsa().is_some()
     }
 
+    #[cfg(feature = "ssh")]
     pub fn to_ssh(&self) -> Option<&SSHPrivateKey> {
         match self {
             Self::SSH(key) => Some(key),
@@ -76,15 +81,17 @@ impl SigningPrivateKey {
         }
     }
 
+    #[cfg(feature = "ssh")]
     pub fn is_ssh(&self) -> bool {
         self.to_ssh().is_some()
     }
 
     pub fn public_key(&self) -> SigningPublicKey {
         match self {
-            Self::Schnorr(key) => { SigningPublicKey::from_schnorr(key.schnorr_public_key()) }
-            Self::ECDSA(key) => { SigningPublicKey::from_ecdsa(key.public_key()) }
-            Self::SSH(key) => { SigningPublicKey::from_ssh(key.public_key().clone()) }
+            Self::Schnorr(key) => SigningPublicKey::from_schnorr(key.schnorr_public_key()),
+            Self::ECDSA(key) => SigningPublicKey::from_ecdsa(key.public_key()),
+            #[cfg(feature = "ssh")]
+            Self::SSH(key) => SigningPublicKey::from_ssh(key.public_key().clone()),
         }
     }
 }
@@ -103,7 +110,7 @@ impl SigningPrivateKey {
         &self,
         message: impl AsRef<[u8]>,
         tag: impl AsRef<[u8]>,
-        rng: Rc<RefCell<dyn RandomNumberGenerator>>
+        rng: Rc<RefCell<dyn RandomNumberGenerator>>,
     ) -> Result<Signature> {
         if let Some(private_key) = self.to_schnorr() {
             let tag_copy = tag.as_ref().to_vec();
@@ -114,11 +121,12 @@ impl SigningPrivateKey {
         }
     }
 
+    #[cfg(feature = "ssh")]
     fn ssh_sign(
         &self,
         message: impl AsRef<[u8]>,
         namespace: impl AsRef<str>,
-        hash_alg: HashAlg
+        hash_alg: HashAlg,
     ) -> Result<Signature> {
         if let Some(private) = self.to_ssh() {
             let sig = private.sign(namespace.as_ref(), hash_alg, message.as_ref())?;
@@ -133,7 +141,7 @@ impl Signer for SigningPrivateKey {
     fn sign_with_options(
         &self,
         message: &dyn AsRef<[u8]>,
-        options: Option<SigningOptions>
+        options: Option<SigningOptions>,
     ) -> Result<Signature> {
         match self {
             Self::Schnorr(_) => {
@@ -143,13 +151,18 @@ impl Signer for SigningPrivateKey {
                     self.schnorr_sign(
                         message,
                         [],
-                        Rc::new(RefCell::new(SecureRandomNumberGenerator))
+                        Rc::new(RefCell::new(SecureRandomNumberGenerator)),
                     )
                 }
             }
-            Self::ECDSA(_) => { self.ecdsa_sign(message) }
+            Self::ECDSA(_) => self.ecdsa_sign(message),
+            #[cfg(feature = "ssh")]
             Self::SSH(_) => {
-                if let Some(SigningOptions::Ssh { namespace, hash_alg }) = options {
+                if let Some(SigningOptions::Ssh {
+                    namespace,
+                    hash_alg,
+                }) = options
+                {
                     self.ssh_sign(message, namespace, hash_alg)
                 } else {
                     bail!("Missing namespace and hash algorithm for SSH signing");
@@ -181,10 +194,11 @@ impl From<SigningPrivateKey> for CBOR {
 impl CBORTaggedEncodable for SigningPrivateKey {
     fn untagged_cbor(&self) -> CBOR {
         match self {
-            SigningPrivateKey::Schnorr(key) => { CBOR::to_byte_string(key.data()) }
+            SigningPrivateKey::Schnorr(key) => CBOR::to_byte_string(key.data()),
             SigningPrivateKey::ECDSA(key) => {
                 vec![(1).into(), CBOR::to_byte_string(key.data())].into()
             }
+            #[cfg(feature = "ssh")]
             SigningPrivateKey::SSH(key) => {
                 let string = key.to_openssh(LineEnding::LF).unwrap();
                 CBOR::to_tagged_value(tags::SSH_TEXT_PRIVATE_KEY, (*string).clone())
@@ -206,7 +220,7 @@ impl CBORTaggedDecodable for SigningPrivateKey {
         // let data = CBOR::try_into_byte_string(untagged_cbor)?;
         // Self::from_data_ref(&data)
         match untagged_cbor.into_case() {
-            CBORCase::ByteString(data) => { Ok(Self::Schnorr(ECPrivateKey::from_data_ref(data)?)) }
+            CBORCase::ByteString(data) => Ok(Self::Schnorr(ECPrivateKey::from_data_ref(data)?)),
             CBORCase::Array(mut elements) => {
                 let tag = usize::try_from(elements.remove(0))?;
                 if tag == 1 {
@@ -216,6 +230,7 @@ impl CBORTaggedDecodable for SigningPrivateKey {
                 }
                 bail!("Invalid tag for SigningPrivateKey");
             }
+#[cfg(feature = "ssh")]
             CBORCase::Tagged(tag, item) => {
                 if tag == tags::SSH_TEXT_PRIVATE_KEY {
                     let string = item.try_into_text()?;
